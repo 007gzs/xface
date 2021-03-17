@@ -32,14 +32,27 @@ class Face:
 
 
 class FaceAnalysis:
-    def __init__(self, *, model_path=None, with_mask=False, lock=False):
+    def __init__(self, *, model_path=None, with_mask=False, lock=False, load_alignment=True, load_recognition=True):
+        """
+        :param model_path: 模型路径
+        :param with_mask: 是否使用口罩模型
+        :param lock: get_faces是否加锁
+        :param load_alignment: 是否加载关键点模型
+        :param load_recognition: 是否加载人脸识别模型
+        """
         if model_path is None:
             model_path = os.path.join(os.path.dirname(__file__), 'models')
         mask_flag = '2.0' if with_mask else '1.0'
 
         self.face_detector = FaceDetector(model_path, 'face_detection', 'face_detection_' + mask_flag)
-        self.face_alignment = FaceAlignment(model_path, 'face_alignment', 'face_alignment_' + mask_flag)
-        self.face_recognition = FaceRecognition(model_path, 'face_recognition', 'face_recognition_' + mask_flag)
+        if load_alignment:
+            self.face_alignment = FaceAlignment(model_path, 'face_alignment', 'face_alignment_' + mask_flag)
+        else:
+            self.face_alignment = None
+        if load_recognition:
+            self.face_recognition = FaceRecognition(model_path, 'face_recognition', 'face_recognition_' + mask_flag)
+        else:
+            self.face_recognition = None
         self.registered_faces = list()
         if lock:
             import threading
@@ -85,8 +98,10 @@ class FaceAnalysis:
 
     def load(self, device=None):
         self.face_detector.load(device)
-        self.face_alignment.load(device)
-        self.face_recognition.load(device)
+        if self.face_alignment is not None:
+            self.face_alignment.load(device)
+        if self.face_recognition is not None:
+            self.face_recognition.load(device)
 
     def get_faces(
             self,
@@ -131,13 +146,13 @@ class FaceAnalysis:
                 landmarks = None
                 feature = None
                 sim_face_ids = None
-                if get_landmarks or get_feature:
+                if (get_landmarks or get_feature) and self.face_alignment is not None:
                     landmarks = self.face_alignment.get(image, det)
                     landmarks_list = []
                     for (x, y) in landmarks.astype(np.int32):
                         landmarks_list.extend((x, y))
                     cropped_image = crop_image_by_mat(image, landmarks_list)
-                    if get_feature:
+                    if get_feature and self.face_recognition is not None:
                         feature = self.face_recognition.get(cropped_image)
                         sim_face_ids = self.check_face(feature, min_sim=min_sim, max_count=match_num)
                 ret.append(Face(
