@@ -10,17 +10,19 @@ from xface.model import FaceAlignment, FaceDetector, FaceRecognition
 
 
 class Face:
-    def __init__(self, *, bbox, det_score, landmarks, feature, sim_face_ids):
+    def __init__(self, *, bbox, det_score, landmark, landmark_106, feature, sim_face_ids):
         """
         :param bbox: 脸部范围
-        :param landmarks: 关键点位置
+        :param landmark: 5关键点位置
+        :param landmark_106: 106关键点位置
         :param det_score: 检测分数
         :param feature: 特征
         :param sim_face_ids: 相似人脸
         """
         self.bbox = bbox
         self.det_score = det_score
-        self.landmarks = landmarks
+        self.landmark = landmark
+        self.landmark_106 = landmark_106
         self.feature = feature
         self.sim_face_ids = sim_face_ids
 
@@ -109,7 +111,7 @@ class FaceAnalysis:
             *,
             img_scaled=1.0,
             max_num=0,
-            get_landmarks=True,
+            get_landmark_106=True,
             get_feature=True,
             min_sim=0.6,
             match_num=1
@@ -119,13 +121,13 @@ class FaceAnalysis:
         :param image: 图片
         :param img_scaled: 图片已缩放比例（返回缩放前坐标）
         :param max_num: 最大返回人脸数（0为全部）
-        :param get_landmarks: 是否返回关键点
+        :param get_landmark_106: 是否返回106关键点
         :param get_feature: 是否返回人脸识别相关参数
         :param min_sim: 人脸识别相似度下限
         :param match_num: 人脸识别匹配返回数量
         """
         with self.lock:
-            dets = self.face_detector.detect(image)
+            dets, landmarks = self.face_detector.detect(image)
             ret = list()
             if dets.shape[0] == 0:
                 return ret
@@ -142,23 +144,23 @@ class FaceAnalysis:
                 bindex = bindex[0:max_num]
                 dets = dets[bindex, :]
 
-            for det in dets:
-                landmarks = None
+            for i in range(dets.shape[0]):
+                det = dets[i]
+                landmark = landmarks[i]
+                landmark_106 = None
                 feature = None
                 sim_face_ids = None
-                if (get_landmarks or get_feature) and self.face_alignment is not None:
-                    landmarks = self.face_alignment.get(image, det)
-                    landmarks_list = []
-                    for (x, y) in landmarks.astype(np.int32):
-                        landmarks_list.extend((x, y))
-                    cropped_image = crop_image_by_mat(image, landmarks_list)
-                    if get_feature and self.face_recognition is not None:
-                        feature = self.face_recognition.get(cropped_image)
-                        sim_face_ids = self.check_face(feature, min_sim=min_sim, max_count=match_num)
+                if get_landmark_106 and self.face_alignment is not None:
+                    landmark_106 = self.face_alignment.get(image, det)
+                if get_feature and self.face_recognition is not None:
+                    cropped_image = crop_image_by_mat(image, landmark.reshape((np.prod(landmark.shape), )).tolist())
+                    feature = self.face_recognition.get(cropped_image)
+                    sim_face_ids = self.check_face(feature, min_sim=min_sim, max_count=match_num)
                 ret.append(Face(
                     bbox=(det[:4] / img_scaled).astype(np.int).tolist(),
                     det_score=float(det[4]),
-                    landmarks=(landmarks / img_scaled).astype(np.int).tolist(),
+                    landmark=(landmark / img_scaled).astype(np.int).tolist(),
+                    landmark_106=None if landmark_106 is None else (landmark_106 / img_scaled).astype(np.int).tolist(),
                     feature=feature,
                     sim_face_ids=sim_face_ids
                 ))

@@ -27,39 +27,50 @@ class FaceDetector(Base):
         assert isinstance(image, np.ndarray)
         input_height, input_width, _ = image.shape
         img = np.float32(image)
-        scale = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
+        scale_box = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
         img -= (104, 117, 123)
         img = img.transpose(2, 0, 1)
         self.model = self.model.to(self.device)
         img = torch.from_numpy(img).unsqueeze(0)
+        scale_landms = torch.Tensor([img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+                                     img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+                                     img.shape[3], img.shape[2]])
         with torch.no_grad():
             img = img.to(self.device)
-            scale = scale.to(self.device)
+            scale_box = scale_box.to(self.device)
+            scale_landms = scale_landms.to(self.device)
             loc, conf, landms = self.model(img)
         priors = self.priorbox_forward(height=input_height, width=input_width)
         priors = priors.to(self.device)
         prior_data = priors.data
         boxes = self.decode(loc.data.squeeze(0), prior_data, self.variance)
-        boxes = boxes * scale
+        boxes = boxes * scale_box
         boxes = boxes.cpu().numpy()
         scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
+        landmarks = self.decode_landm(landms.data.squeeze(0), prior_data, self.variance)
+        landmarks = landmarks * scale_landms
+        landmarks = landmarks.reshape((landmarks.shape[0], 5, 2))
+        landmarks = landmarks.cpu().numpy()
 
         # ignore low scores
         inds = np.where(scores > self.confidence_threshold)[0]
         boxes = boxes[inds]
         scores = scores[inds]
+        landmarks = landmarks[inds]
 
         # keep top-K before NMS
         order = scores.argsort()[::-1]
         boxes = boxes[order]
         scores = scores[order]
+        landmarks = landmarks[order]
 
         # do NMS
         nms_threshold = 0.2
         dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
         keep = self.py_cpu_nms(dets, nms_threshold)
         dets = dets[keep, :]
-        return dets
+        landmarks = landmarks[keep]
+        return dets, landmarks
 
     def py_cpu_nms(self, dets, thresh):
         """
@@ -90,6 +101,7 @@ class FaceDetector(Base):
             order = order[inds + 1]
         return keep
 
+    # Adapted from https://github.com/Hakuyume/chainer-ssd
     def decode(self, loc, priors, variances):
         """Decode locations from predictions using priors to undo
         the encoding we did for offset regression at train time.
@@ -99,19 +111,40 @@ class FaceDetector(Base):
             priors (tensor): Prior boxes in center-offset form.
                 Shape: [num_priors,4].
             variances: (list[float]) Variances of priorboxes
-
         Return:
             decoded bounding box predictions
         """
-        boxes = torch.cat((priors[:, :2], priors[:, 2:]), 1)
-        boxes[:, :2] = priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:]
-        boxes[:, 2:] = priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])
+
+        boxes = torch.cat((
+            priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
+            priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
         boxes[:, :2] -= boxes[:, 2:] / 2
         boxes[:, 2:] += boxes[:, :2]
         return boxes
 
+    def decode_landm(self, pre, priors, variances):
+        """Decode landm from predictions using priors to undo
+        the encoding we did for offset regression at train time.
+        Args:
+            pre (tensor): landm predictions for loc layers,
+                Shape: [num_priors,10]
+            priors (tensor): Prior boxes in center-offset form.
+                Shape: [num_priors,4].
+            variances: (list[float]) Variances of priorboxes
+        Return:
+            decoded landm predictions
+        """
+        landms = torch.cat((priors[:, :2] + pre[:, :2] * variances[0] * priors[:, 2:],
+                            priors[:, :2] + pre[:, 2:4] * variances[0] * priors[:, 2:],
+                            priors[:, :2] + pre[:, 4:6] * variances[0] * priors[:, 2:],
+                            priors[:, :2] + pre[:, 6:8] * variances[0] * priors[:, 2:],
+                            priors[:, :2] + pre[:, 8:10] * variances[0] * priors[:, 2:],
+                            ), dim=1)
+        return landms
+
+    # https://github.com/biubug6/Pytorch_Retinaface
     def priorbox_forward(self, height, width):
-        feature_maps = [[ceil(height/step), ceil(width/step)] for step in self.steps]
+        feature_maps = [[ceil(height / step), ceil(width / step)] for step in self.steps]
         anchors = []
         for k, f in enumerate(feature_maps):
             min_sizes = self.min_sizes[k]

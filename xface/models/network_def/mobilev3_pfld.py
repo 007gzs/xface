@@ -6,7 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def conv_bn(inp, oup, kernel_size, stride, padding=1, conv_layer=nn.Conv2d, norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU):
+def conv_bn(
+        inp, oup, kernel_size, stride, padding=1, conv_layer=nn.Conv2d, norm_layer=nn.BatchNorm2d, nlin_layer=nn.ReLU
+):
     return nn.Sequential(
         conv_layer(inp, oup, kernel_size, stride, padding, bias=False),
         norm_layer(oup),
